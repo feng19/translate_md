@@ -73,14 +73,15 @@ defmodule TranslateMd.Progress do
   @doc """
   打印调试消息（仅在 debug 模式下显示）。
   """
-  @spec debug(String.t(), boolean()) :: :ok
-  def debug(message, debug_enabled) do
-    if debug_enabled do
-      IO.puts(:stderr, "#{@blue}[DEBUG] #{message}#{@reset}")
-    end
-
-    :ok
+  def debug(message, true) when is_function(message) do
+    IO.puts(:stderr, "#{@blue}[DEBUG] #{message.()}#{@reset}")
   end
+
+  def debug(message, true) do
+    IO.puts(:stderr, "#{@blue}[DEBUG] #{message}#{@reset}")
+  end
+
+  def debug(_message, false), do: :ok
 
   @doc """
   显示任务开始的标题框。
@@ -100,7 +101,7 @@ defmodule TranslateMd.Progress do
   @spec show_help_header() :: :ok
   def show_help_header do
     IO.puts("#{@green}╔═══════════════════════════════════════════╗#{@reset}")
-    IO.puts("#{@green}║    Ollama Markdown 翻译工具 (Elixir)      ║#{@reset}")
+    IO.puts("#{@green}║        Markdown 翻译工具 (Elixir)         ║#{@reset}")
     IO.puts("#{@green}╚═══════════════════════════════════════════╝#{@reset}")
   end
 

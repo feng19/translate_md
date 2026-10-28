@@ -50,7 +50,7 @@ mix escript.build
 
 选项:
   -h, --help              显示帮助信息
-  -m, --model MODEL       指定 Ollama 模型 (默认: translategemma)
+  -m, --model MODEL       指定 Ollama 模型 (默认: hy-mt2-1.8b)
   -o, --output FILE       指定输出文件名 (默认: 输入文件名_zh.md)
   -p, --prompt PROMPT     自定义 System Prompt
   -s, --chunk-size SIZE   每次翻译的字符数 (默认: 1200)

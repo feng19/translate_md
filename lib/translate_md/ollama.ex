@@ -14,8 +14,8 @@ defmodule TranslateMd.Ollama do
     - `{:error, reason}` - 服务不可用
   """
   @spec check_service(Config.t()) :: :ok | {:error, String.t()}
-  def check_service(%Config{ollama_url: url}) do
-    case Req.get("#{url}/api/tags", receive_timeout: 5000) do
+  def check_service(%Config{url: url} = config) do
+    case Req.get(url <> tags_path(config), receive_timeout: 5000) do
       {:ok, %{status: 200}} ->
         :ok
 
@@ -38,9 +38,12 @@ defmodule TranslateMd.Ollama do
     - `{:error, :not_found}` - 模型不存在
   """
   @spec check_model(Config.t()) :: :ok | {:error, :not_found}
-  def check_model(%Config{ollama_url: url, model: model}) do
-    case Req.get("#{url}/api/tags") do
-      {:ok, %{status: 200, body: %{"models" => models}}} ->
+  def check_model(%Config{url: url, model: model} = config) do
+    case Req.get(url <> tags_path(config)) do
+      {:ok, %{status: 200, body: %{"data" => models}}} when config.api == :openai ->
+        if Enum.any?(models, &(&1["id"] == model)), do: :ok, else: {:error, :not_found}
+
+      {:ok, %{status: 200, body: %{"models" => models}}} when config.api == :ollama ->
         model_exists =
           Enum.any?(models, fn m ->
             m["name"] == model || String.starts_with?(m["name"], "#{model}:")
@@ -68,10 +71,14 @@ defmodule TranslateMd.Ollama do
   def translate(text, %Config{} = config) do
     payload = build_payload(text, config)
 
-    case Req.post("#{config.ollama_url}/api/generate",
+    case Req.post(config.url <> generate_path(config),
            json: payload,
            receive_timeout: :infinity
          ) do
+      {:ok, %{status: 200, body: %{"choices" => [%{"message" => %{"content" => content}} | _]}}}
+      when is_binary(content) ->
+        {:ok, content |> String.trim() |> strip_code_block_wrapper()}
+
       {:ok, %{status: 200, body: %{"response" => response}}} ->
         # LLM 有时会在翻译结果周围添加代码块包装，需要去除
         cleaned = response |> String.trim() |> strip_code_block_wrapper()
@@ -95,6 +102,18 @@ defmodule TranslateMd.Ollama do
   构建 Ollama API 请求的 payload。
   """
   @spec build_payload(String.t(), Config.t()) :: map()
+  def build_payload(text, %Config{api: :openai} = config) do
+    %{
+      model: config.model,
+      messages: [
+        %{role: "system", content: config.system_prompt},
+        %{role: "user", content: build_prompt(text)}
+      ],
+      stream: false,
+      temperature: config.temperature
+    }
+  end
+
   def build_payload(text, %Config{} = config) do
     %{
       model: config.model,
@@ -106,6 +125,12 @@ defmodule TranslateMd.Ollama do
       }
     }
   end
+
+  defp tags_path(%Config{api: :openai}), do: "/v1/models"
+  defp tags_path(_), do: "/api/tags"
+
+  defp generate_path(%Config{api: :openai}), do: "/v1/chat/completions"
+  defp generate_path(_), do: "/api/generate"
 
   defp build_prompt(text) do
     "Translate the following English text to Chinese. Maintain all markdown formatting:\n\n#{text}"

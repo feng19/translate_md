@@ -10,13 +10,15 @@ defmodule TranslateMd.Config do
   defstruct [
     :input_file,
     :output_file,
-    model: "translategemma",
+    model: "hy-mt2-1.8b",
     system_prompt: @default_system_prompt,
     chunk_size: 1200,
     temperature: 0.3,
     concurrency: 16,
+    force: false,
     debug: false,
-    ollama_url: "http://localhost:11434"
+    api: :openai,
+    url: "http://127.0.0.1:1234"
   ]
 
   @type t :: %__MODULE__{
@@ -27,8 +29,10 @@ defmodule TranslateMd.Config do
           chunk_size: pos_integer(),
           temperature: float(),
           concurrency: pos_integer(),
+          force: boolean(),
           debug: boolean(),
-          ollama_url: String.t()
+          api: :openai | :ollama,
+          url: String.t()
         }
 
   @doc """

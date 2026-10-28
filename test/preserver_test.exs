@@ -566,7 +566,7 @@ defmodule TranslateMd.PreserverTest do
     test "handles code block with only whitespace content" do
       content = """
       ```
-         
+
       ```
       """
 
@@ -855,6 +855,196 @@ defmodule TranslateMd.PreserverTest do
       assert String.contains?(restored, "```python")
       assert String.contains?(restored, "```bash")
       assert String.contains?(restored, "def hello():")
+    end
+  end
+
+  describe "restore handles LLM-added code fences around placeholders" do
+    test "removes LLM-added code fences wrapping a code block placeholder" do
+      # Original content has code blocks without language identifiers
+      content = """
+      # test
+
+      hello
+
+      I'm fine
+
+      ```
+      {
+        content: "welcome"
+      }
+      ```
+
+      related step fields
+
+      ```
+      {
+       "help": "ask",
+      }
+      ```
+      """
+
+      {preserved, placeholders} = Preserver.preserve(content)
+
+      # Verify code blocks were extracted
+      code_block_count =
+        placeholders
+        |> Map.keys()
+        |> Enum.count(&String.contains?(&1, "CODE_BLOCK"))
+
+      assert code_block_count == 2
+
+      # Simulate LLM wrapping placeholders in code fences (this is what LLMs do)
+      # The LLM sees the placeholder and thinks it should be in a code block
+      translated =
+        Regex.replace(
+          ~r/({{__PRESERVE_CODE_BLOCK_\d+__}})/,
+          preserved,
+          "```\n\\1\n```"
+        )
+
+      restored = Preserver.restore(translated, placeholders)
+
+      # The restored content should NOT have doubled ``` fences
+      refute String.contains?(restored, "```\n```"), "Found doubled code fences in restored content"
+
+      # The code blocks should be properly restored
+      assert String.contains?(restored, "content: \"welcome\"")
+      assert String.contains?(restored, "\"help\": \"ask\"")
+    end
+
+    test "removes LLM-added code fences with language on wrapper" do
+      content = "Some text\n\n```\n{\"key\": \"value\"}\n```\n\nMore text"
+
+      {preserved, placeholders} = Preserver.preserve(content)
+
+      # LLM wraps placeholder with ```json
+      translated =
+        Regex.replace(
+          ~r/({{__PRESERVE_CODE_BLOCK_\d+__}})/,
+          preserved,
+          "```json\n\\1\n```"
+        )
+
+      restored = Preserver.restore(translated, placeholders)
+
+      refute String.contains?(restored, "```json\n```"), "Found LLM wrapper fences in restored content"
+      assert String.contains?(restored, "{\"key\": \"value\"}")
+    end
+
+    test "does not affect non-code-block placeholders wrapped in fences" do
+      # Inline code should not be affected by code fence stripping
+      content = "Use `npm install` to install."
+
+      {preserved, placeholders} = Preserver.preserve(content)
+
+      restored = Preserver.restore(preserved, placeholders)
+      assert String.contains?(restored, "`npm install`")
+    end
+
+    test "handles full translation scenario with code blocks without language identifiers" do
+      # This is the exact scenario from the bug report
+      original = "# test\n\nhello\n\nI'm fine\n\n```\n{\n  content: \"welcome\"\n}\n```\n\nrelated step fields\n\n```\n{\n \"help\": \"ask\",\n}\n```"
+
+      {preserved, placeholders} = Preserver.preserve(original)
+
+      # Simulate what the LLM returns: translated text with placeholders wrapped in code fences
+      translated_with_llm_fences =
+        preserved
+        |> String.replace("# test", "# 测试")
+        |> String.replace("hello", "你好")
+        |> String.replace("I'm fine", "我很好")
+        |> String.replace("related step fields", "相关步骤字段")
+        |> then(fn text ->
+          Regex.replace(
+            ~r/({{__PRESERVE_CODE_BLOCK_\d+__}})/,
+            text,
+            "```\n\\1\n```"
+          )
+        end)
+
+      restored = Preserver.restore(translated_with_llm_fences, placeholders)
+
+      # Should have proper code blocks, not doubled fences
+      refute String.contains?(restored, "```\n```"), "Found doubled code fences"
+      assert String.contains?(restored, "# 测试")
+      assert String.contains?(restored, "你好")
+      assert String.contains?(restored, "我很好")
+      assert String.contains?(restored, "相关步骤字段")
+      assert String.contains?(restored, "content: \"welcome\"")
+      assert String.contains?(restored, "\"help\": \"ask\"")
+    end
+
+    test "handles real LLM output with stray code fences (pattern from actual debug log)" do
+      # This matches the exact real-world LLM output pattern observed in production
+      original = "# test\n\nhello\n\nI'm fine\n\n```\n{\n  content: \"welcome\"\n}\n```\n\nrelated step fields\n\n```\n{\n \"help\": \"ask\",\n}\n```"
+
+      {_preserved, placeholders} = Preserver.preserve(original)
+
+      # Get the actual placeholder keys
+      cb_keys =
+        placeholders
+        |> Enum.filter(fn {_k, v} -> v.type == "code_block" end)
+        |> Enum.sort_by(fn {_k, v} -> v.index end)
+        |> Enum.map(fn {k, _v} -> k end)
+
+      [cb0, cb1] = cb_keys
+
+      # Simulate the exact LLM output pattern from the debug log:
+      # - ``` on its own line before first placeholder
+      # - ``` with spaces on same line as second placeholder
+      llm_output =
+        "# 测试\n\n你好\n\n我很好\n\n```\n#{cb0}\n\n相关步骤字段\n\n```                  #{cb1}"
+
+      restored = Preserver.restore(llm_output, placeholders)
+
+      refute String.contains?(restored, "```\n```"), "Found doubled code fences"
+      refute Regex.match?(~r/```\s+```/, restored), "Found stray code fences"
+      assert String.contains?(restored, "# 测试")
+      assert String.contains?(restored, "你好")
+      assert String.contains?(restored, "我很好")
+      assert String.contains?(restored, "相关步骤字段")
+      assert String.contains?(restored, "content: \"welcome\"")
+      assert String.contains?(restored, "\"help\": \"ask\"")
+    end
+
+    test "handles LLM adding only opening fence before placeholder" do
+      content = "Text\n\n```\n{\"key\": \"value\"}\n```\n\nMore text"
+
+      {preserved, placeholders} = Preserver.preserve(content)
+
+      cb_key =
+        placeholders
+        |> Enum.filter(fn {_k, v} -> v.type == "code_block" end)
+        |> Enum.map(fn {k, _v} -> k end)
+        |> hd()
+
+      # LLM adds only a ``` before the placeholder
+      llm_output = String.replace(preserved, cb_key, "```\n#{cb_key}")
+
+      restored = Preserver.restore(llm_output, placeholders)
+
+      refute String.contains?(restored, "```\n```"), "Found doubled code fences"
+      assert String.contains?(restored, "{\"key\": \"value\"}")
+    end
+
+    test "handles LLM adding only closing fence after placeholder" do
+      content = "Text\n\n```\n{\"key\": \"value\"}\n```\n\nMore text"
+
+      {preserved, placeholders} = Preserver.preserve(content)
+
+      cb_key =
+        placeholders
+        |> Enum.filter(fn {_k, v} -> v.type == "code_block" end)
+        |> Enum.map(fn {k, _v} -> k end)
+        |> hd()
+
+      # LLM adds only a ``` after the placeholder
+      llm_output = String.replace(preserved, cb_key, "#{cb_key}\n```")
+
+      restored = Preserver.restore(llm_output, placeholders)
+
+      refute String.contains?(restored, "```\n```"), "Found doubled code fences"
+      assert String.contains?(restored, "{\"key\": \"value\"}")
     end
   end
 

@@ -104,6 +104,9 @@ defmodule TranslateMd.Preserver do
   """
   @spec restore(String.t(), placeholders()) :: String.t()
   def restore(content, placeholders) when is_binary(content) and is_map(placeholders) do
+    # 先清理 LLM 可能在代码块占位符周围添加的多余代码围栏
+    content = strip_llm_added_fences(content, placeholders)
+
     # 按照占位符的编号从大到小还原，避免部分匹配问题
     placeholders
     |> Enum.sort_by(fn {_key, info} -> -info.index end)
@@ -126,6 +129,39 @@ defmodule TranslateMd.Preserver do
   # ============================================
   # 私有函数
   # ============================================
+
+  # 清理 LLM 在翻译过程中添加的多余代码围栏
+  #
+  # 原理：所有真正的代码块在 preserve 阶段已被提取为占位符，
+  # 因此翻译后的内容中不应存在任何 ``` 围栏。
+  # 如果存在，一定是 LLM 错误添加的，可以安全地全部移除。
+  defp strip_llm_added_fences(content, placeholders) do
+    has_code_blocks =
+      Enum.any?(placeholders, fn {_key, info} -> info.type == "code_block" end)
+
+    if has_code_blocks do
+      content
+      |> String.split("\n")
+      |> Enum.map(fn line ->
+        cond do
+          # 独立的 ``` 行（可能带有语言标识和空白字符）-> 直接移除
+          String.match?(line, ~r/^\s*```[a-zA-Z0-9]*\s*$/) ->
+            nil
+
+          # ``` 后面跟着占位符的行 -> 去掉 ``` 前缀，保留占位符
+          String.match?(line, ~r/^\s*```[a-zA-Z0-9]*\s+.*__PRESERVE_/) ->
+            String.replace(line, ~r/^\s*```[a-zA-Z0-9]*\s+/, "")
+
+          true ->
+            line
+        end
+      end)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join("\n")
+    else
+      content
+    end
+  end
 
   # 特殊处理：代码块（支持嵌套）
   # 使用状态机方式解析，正确处理嵌套的代码块

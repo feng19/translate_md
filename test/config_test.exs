@@ -7,12 +7,13 @@ defmodule TranslateMd.ConfigTest do
     test "creates config with default values" do
       config = Config.new()
 
-      assert config.model == "translategemma"
+      assert config.model == "hy-mt2-1.8b"
       assert config.chunk_size == 1200
       assert config.temperature == 0.3
       assert config.concurrency == 16
       assert config.debug == false
-      assert config.ollama_url == "http://localhost:11434"
+      assert config.url == "http://127.0.0.1:1234"
+      assert config.api == :openai
     end
 
     test "creates config with custom values" do

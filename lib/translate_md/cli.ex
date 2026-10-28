@@ -27,22 +27,27 @@ defmodule TranslateMd.CLI do
         strict: [
           help: :boolean,
           model: :string,
+          api: :string,
+          url: :string,
           output: :string,
           prompt: :string,
           chunk_size: :integer,
           temperature: :float,
           concurrency: :integer,
+          force: :boolean,
           debug: :boolean,
           show_default_prompt: :boolean
         ],
         aliases: [
           h: :help,
           m: :model,
+          u: :url,
           o: :output,
           p: :prompt,
           s: :chunk_size,
           t: :temperature,
           c: :concurrency,
+          f: :force,
           d: :debug
         ]
       )
@@ -53,6 +58,9 @@ defmodule TranslateMd.CLI do
 
       opts[:show_default_prompt] ->
         {:show_prompt}
+
+      opts[:api] not in [nil, "openai", "ollama"] ->
+        {:error, "--api 只支持 openai 或 ollama"}
 
       invalid != [] ->
         {:error, "未知选项: #{inspect(invalid)}"}
@@ -70,20 +78,28 @@ defmodule TranslateMd.CLI do
   defp build_config(input_file, opts) do
     output_file = opts[:output] || Config.default_output_file(input_file)
 
+    api = opts[:api] && String.to_existing_atom(opts[:api])
+
     config_opts =
       [
         input_file: input_file,
         output_file: output_file
       ]
+      |> maybe_add(:api, api)
+      |> maybe_add(:url, opts[:url] || default_url(api))
       |> maybe_add(:model, opts[:model])
       |> maybe_add(:system_prompt, opts[:prompt])
       |> maybe_add(:chunk_size, opts[:chunk_size])
       |> maybe_add(:temperature, opts[:temperature])
       |> maybe_add(:concurrency, opts[:concurrency])
+      |> maybe_add(:force, opts[:force])
       |> maybe_add(:debug, opts[:debug])
 
     {:ok, Config.new(config_opts)}
   end
+
+  defp default_url(:ollama), do: "http://localhost:11434"
+  defp default_url(_), do: nil
 
   defp maybe_add(list, _key, nil), do: list
   defp maybe_add(list, key, value), do: Keyword.put(list, key, value)
@@ -114,7 +130,7 @@ defmodule TranslateMd.CLI do
     end
 
     # 检查输出文件是否已存在
-    if File.exists?(config.output_file) do
+    if not config.force && File.exists?(config.output_file) do
       Progress.warning("输出文件已存在: #{config.output_file}")
 
       case IO.gets("是否覆盖? (y/N): ") do
@@ -127,10 +143,10 @@ defmodule TranslateMd.CLI do
       end
     end
 
-    # 检查 Ollama 服务
+    # 检查 API 服务
     case Ollama.check_service(config) do
       :ok ->
-        Progress.success("Ollama 服务运行正常")
+        Progress.success("API 服务运行正常")
 
       {:error, reason} ->
         Progress.error(reason)
@@ -144,7 +160,10 @@ defmodule TranslateMd.CLI do
 
       {:error, :not_found} ->
         Progress.warning("模型 '#{config.model}' 未找到")
-        Progress.info("请先拉取模型: ollama pull #{config.model}")
+
+        if config.api == :ollama,
+          do: Progress.info("请先拉取模型: ollama pull #{config.model}"),
+          else: Progress.info("请确认服务中已加载该模型")
         System.halt(1)
     end
 
@@ -170,12 +189,15 @@ defmodule TranslateMd.CLI do
 
     选项:
       -h, --help              显示帮助信息
-      -m, --model MODEL       指定 Ollama 模型 (默认: #{config.model})
+      --api TYPE              接口类型: openai | ollama (默认: #{config.api})
+      -u, --url URL           服务地址 (默认: #{config.url}；ollama 为 http://localhost:11434)
+      -m, --model MODEL       指定模型 (默认: #{config.model})
       -o, --output FILE       指定输出文件名 (默认: 输入文件名_zh.md)
       -p, --prompt PROMPT     自定义 System Prompt
       -s, --chunk-size SIZE   每次翻译的字符数 (默认: #{config.chunk_size})
       -t, --temperature TEMP  模型温度 (默认: #{config.temperature})
       -c, --concurrency NUM   最大并发数 (默认: #{config.concurrency})
+      -f, --force             强制覆盖输出文件
       -d, --debug             启用调试模式
       --show-default-prompt   显示默认的 System Prompt
 

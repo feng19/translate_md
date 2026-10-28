@@ -119,10 +119,24 @@ defmodule TranslateMd.Translator do
       {:ok, ""}
     else
       # 3. 翻译并还原
+      Progress.debug(
+        fn ->
+          sample_chunks =
+            Enum.take(chunks, 3)
+            |> Enum.map(fn {i, c} -> "块 #{i + 1}:\n#{c}\n" end)
+            |> Enum.join("\n")
+
+          "分块内容示例:\n#{sample_chunks}"
+        end,
+        config.debug
+      )
+
       case translate_chunks(chunks, config) do
         {:ok, translated} ->
+          Progress.debug(fn -> "翻译后的内容:\n#{translated}" end, config.debug)
           # 还原不可翻译内容
           restored = Preserver.restore(translated, placeholders)
+          Progress.debug(fn -> "还原后的内容:\n#{restored}" end, config.debug)
           {:ok, restored}
 
         {:error, reason} ->
